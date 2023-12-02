@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Random Name Picker</title>
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      flex-direction: column;
+      background-color: black;
+      color: white;
+    }
+    #name-display {
+      font-size: 36px;
+      text-align: center;
+      margin-bottom: 20px;
+      font-weight: bold;
+    }
+    #name-input {
+      width: 400px;
+      height: 80px;
+      margin-bottom: 10px;
+      font-size: 16px;
+    }
+    button {
+      cursor: pointer;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<textarea id="name-input" placeholder="Enter names separated by commas" rows="4" cols="50"></textarea>
+<button onclick="updateNames()">Submit</button>
+<div id="name-display">Tap to pick a random name</div>
+
+<script>
+  let names = [];
+  let remainingNames = [];
+  let lastDisplayedName = null;
+
+  function updateNames() {
+    const nameInput = document.getElementById("name-input");
+    const nameDisplay = document.getElementById("name-display");
+
+    // Split the input into an array of names
+    names = nameInput.value.split(',').map(name => name.trim());
+
+    // Display a message if no names are entered
+    if (names.length === 0 || (names.length === 1 && names[0] === "")) {
+      nameDisplay.textContent = "Please enter at least one name";
+    } else {
+      // Copy names to remainingNames array
+      remainingNames = names.slice();
+      nameDisplay.textContent = "Tap to pick a random name";
+      // Hide text field and submit button
+      nameInput.classList.add("hidden");
+      document.querySelector('button').classList.add("hidden");
+    }
+  }
+
+  function pickRandomName() {
+    if (remainingNames.length === 0) {
+      return "The End";
+    }
+
+    const randomIndex = Math.floor(Math.random() * remainingNames.length);
+    const pickedName = remainingNames[randomIndex];
+
+    // Remove picked name from remainingNames
+    remainingNames.splice(randomIndex, 1);
+
+    return pickedName;
+  }
+
+  function updateName() {
+    const nameDisplay = document.getElementById("name-display");
+    nameDisplay.textContent = pickRandomName();
+  }
+
+  // Add a click event listener to the body to change the name on each tap
+  document.body.addEventListener("click", updateName);
+</script>
+
+</body>
+</html>
