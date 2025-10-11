@@ -130,6 +130,9 @@
     // Inline editor mode: 'CHANGE' (replace current) or 'ADD_NEXT' (enqueue for next turn)
     let editorMode = 'CHANGE';
     let editorOpen = false;
+	
+	let queuedNext = null; // holds a title that must appear on the very next pick
+
 
     // Persistence
     const STORAGE_KEY = 'charades-picker-v1';
@@ -205,14 +208,16 @@
       setEditButtonLabel();
     }
 
-    function resetTimerToIdle() {
-      if (timerRAF) cancelAnimationFrame(timerRAF); timerRAF=null;
-      timerState = 'IDLE'; timerElapsed = 0; setTimerChip(0);
-      els.timerBtn.textContent = 'Start Timer';
-      els.timerBtn.disabled = false; // enabled by default; may be disabled elsewhere
-      setLockedUI(false);
-      setEditButtonLabel();
-    }
+function resetTimerToIdle() {
+  if (timerRAF) cancelAnimationFrame(timerRAF); timerRAF = null;
+  timerState = 'IDLE'; timerElapsed = 0; setTimerChip(0);
+  els.timerBtn.textContent = 'Start Timer';
+  els.timerBtn.disabled = false;
+  setLockedUI(false);
+  setEditButtonLabel();
+  queuedNext = null; // NEW: clear any queued title on full reset-to-idle
+}
+
 
     // ───────────────────────────────────────────────────────────────────────────
     // HELPERS
@@ -302,23 +307,28 @@
     }
 
     // Apply an "Add title" (queue for next person)
-    function applyAddNext(newTitle){
-      const t = newTitle.trim();
-      if (!t) { showToast('Please enter a title'); return false; }
-      // Ensure it won't appear twice
-      if (!remaining.some(x => x.toLowerCase() === t.toLowerCase())
-          && !(currentTitle() && currentTitle().toLowerCase()===t.toLowerCase())) {
-        // Put at the very front so it’s guaranteed to be next
-        remaining.unshift(t);
-      }
-      // Also include in names for session resets if missing
-      if (!names.some(x => x.toLowerCase() === t.toLowerCase())) names.push(t);
+function applyAddNext(newTitle){
+  const t = newTitle.trim();
+  if (!t) { showToast('Please enter a title'); return false; }
 
-      saveState(); updateCounter();
-      // Keep timer in STOPPED state (per your flow). Start Timer stays disabled until the next pick.
-      showToast(`Queued for next: ${t}`);
-      return true;
-    }
+  // Ensure it appears only once in remaining
+  const dupIdx = remaining.findIndex(x => x.toLowerCase() === t.toLowerCase());
+  if (dupIdx >= 0) remaining.splice(dupIdx, 1);
+
+  // Put it at the very front so it's guaranteed to be next
+  remaining.unshift(t);
+
+  // Mark as the forced-next pick
+  queuedNext = t;
+
+  // Track in names for session resets if missing
+  if (!names.some(x => x.toLowerCase() === t.toLowerCase())) names.push(t);
+
+  saveState(); updateCounter();
+  showToast(`Queued for next: ${t}`);
+  return true;
+}
+
 
     // ───────────────────────────────────────────────────────────────────────────
     // ACTIONS
@@ -335,7 +345,10 @@
         els.reset.classList.add('hidden');
         els.timerBtn.classList.add('hidden');
         els.editBtn.classList.add('hidden');
-        if (!els.input.value.trim() && names.length) els.input.value = names.join('\n');
+        //if (!els.input.value.trim() && names.length) els.input.value = names.join('\n');
+		 
+		els.input.value = names.join('\n');   //(always reflect the latest deck including added titles):
+		
         els.input.focus();
         try { const len = els.input.value.length; els.input.setSelectionRange(len,len); } catch {}
         return;
@@ -354,23 +367,62 @@
       els.timerBtn.disabled = true;
     }
 
-    function pickOne(){
-      if (pickingLock || isTiming() || editorOpen) return;
-      pickingLock = true;
-      try{
-        if (remaining.length === 0){ els.display.textContent = 'The End'; return; }
-        const idx = Math.floor(Math.random() * remaining.length);
-        const picked = remaining[idx];
-        remaining.splice(idx,1);
-        history.push(picked);
-        els.display.textContent = picked;
-        updateCounter(); saveState();
-        resetTimerToIdle();
-        // NEW TITLE SHOWN → enable Start Timer (it was disabled after stop)
-        els.timerBtn.disabled = false;
-        setEditButtonLabel();
-      } finally { setTimeout(()=>{ pickingLock=false; }, 180); }
+const beep = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA='); 
+let audioCtx = null;
+function playBeep() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 660; // Hz
+    gain.gain.value = 0.2;     // volume
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.15); // 150 ms beep
+  } catch (e) {}
+}
+
+
+function pickOne(){
+  if (pickingLock || isTiming() || editorOpen) return;
+  pickingLock = true;
+  
+  playBeep(); // 🔊 works on every tap or Enter
+
+  try {
+    if (remaining.length === 0) { els.display.textContent = 'The End'; return; }
+
+    let picked, idx;
+
+    // NEW: if a title was queued, pick that one deterministically
+    if (queuedNext) {
+      idx = remaining.findIndex(x => x.toLowerCase() === queuedNext.toLowerCase());
+      if (idx < 0) idx = 0; // safety fallback
+      picked = remaining[idx];
+      remaining.splice(idx, 1);
+      queuedNext = null; // consumed
+    } else {
+      // original random behavior
+      idx = Math.floor(Math.random() * remaining.length);
+      picked = remaining[idx];
+      remaining.splice(idx, 1);
     }
+
+    history.push(picked);
+    els.display.textContent = picked;
+    updateCounter();
+    saveState();
+
+    resetTimerToIdle();
+    els.timerBtn.disabled = false; // enable Start Timer for the new card
+    setEditButtonLabel();
+  } finally {
+    setTimeout(() => { pickingLock = false; }, 180);
+  }
+}
+
 
     function undoOne(){
       if (history.length === 0 || isTiming() || editorOpen) return;
@@ -518,7 +570,7 @@
     // Keyboard shortcuts
     document.addEventListener('keydown', (e)=>{
       const k = e.key.toLowerCase();
-      if (k===' ' || k==='enter'){
+      if (k==='enter'){
         if (isTiming() || editorOpen) { e.preventDefault(); return; }
         e.preventDefault(); pickOne();
       } else if ((e.ctrlKey||e.metaKey) && k==='z'){
@@ -527,10 +579,10 @@
       } else if ((e.ctrlKey||e.metaKey) && k==='r'){
         if (isTiming() || editorOpen){ e.preventDefault(); return; }
         e.preventDefault(); resetGame();
-      } else if (k==='t'){
+      } else if ((e.ctrlKey||e.metaKey) && k==='t'){
         e.preventDefault();
         if (isTiming()) stopTimer(); else startTimer();
-      } else if (k==='e'){ // quick open editor
+      } else if ((e.ctrlKey||e.metaKey) && k==='e'){ // quick open editor
         e.preventDefault();
         if (editorOpen) return;
         if (editorMode==='CHANGE'){ const cur=currentTitle(); if (cur) openEditor(cur); }
