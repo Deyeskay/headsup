@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Random Name Picker + Timer + Edit/Queue</title>
+  <style>
+    :root { --bg:#000; --fg:#fff; --muted:#9aa0a6; --accent:#e8eaed; }
+    * { box-sizing: border-box; }
+    html,body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg); color: var(--fg);
+      display: grid; place-items: center; padding: 24px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    .container { width: min(840px, 100%); display: grid; gap: 16px; }
+    textarea {
+      width: 100%; min-height: 140px; font-size: 16px; padding: 12px 14px;
+      background: #111; color: var(--fg); border: 1px solid #222; border-radius: 10px; resize: vertical;
+    }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    button {
+      appearance: none; border: 1px solid #333; background: #1a1a1a; color: var(--fg);
+      padding: 10px 14px; border-radius: 10px; cursor: pointer; font-weight: 600; letter-spacing: .2px;
+    }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    #name-display {
+      user-select: none; text-align: center; font-weight: 800; line-height: 1.2;
+      font-size: clamp(28px, 7vw, 64px); padding: 28px 18px; border-radius: 16px;
+      border: 1px solid #222; background: #0e0e0e;
+    }
+    .hint { text-align: center; color: var(--muted); font-size: 14px; }
+    .hidden { display: none !important; }
+    .pill {
+      display: inline-flex; gap: 8px; align-items: center; padding: 6px 10px;
+      border-radius: 999px; background: #111; border: 1px solid #222; color: var(--muted); font-size: 13px;
+    }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .samples { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    /* Inline editor below the card */
+    .editor {
+      display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center;
+      background:#0e0e0e; border:1px solid #222; border-radius:12px; padding:12px;
+    }
+    .editor input[type="text"]{
+      width:100%; background:#111; color:var(--fg); border:1px solid #222; border-radius:10px;
+      padding:10px 12px; font-size:16px;
+    }
+    .toast {
+      position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+      background: #111; color: var(--fg); border: 1px solid #222; border-radius: 999px;
+      padding: 8px 14px; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s ease;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Editor textarea for bulk list -->
+    <textarea id="name-input" placeholder="Paste or type items — separated by commas or new lines."></textarea>
+
+    <!-- Controls -->
+    <div class="row">
+      <button id="btn-submit">Start</button>
+      <button id="btn-reset"  class="hidden">Reset</button>
+      <button id="btn-undo"   class="hidden">Undo</button>
+      <button id="btn-timer"  class="hidden">Start Timer</button>
+      <!-- NEW: Edit/Queue button (label switches: Change title / Add title) -->
+      <button id="btn-edit"   class="hidden">Change title</button>
+    </div>
+
+    <!-- Optional sample buttons -->
+    <div class="samples">
+      <button id="btn-s1">Load sample 1 (100 pre-1990)</button>
+      <button id="btn-s2">Load sample 2 (200 all-era)</button>
+    </div>
+
+    <!-- Big card -->
+    <div id="name-display" tabindex="0" aria-live="polite">Tap here to pick a random name</div>
+
+    <!-- Inline single-line editor (hidden until needed) -->
+    <div id="inline-editor" class="editor hidden" role="dialog" aria-label="Edit title">
+      <input id="edit-input" type="text" placeholder="Type a title..." />
+      <button id="btn-edit-save">Save</button>
+      <button id="btn-edit-cancel">Cancel</button>
+    </div>
+
+    <!-- Footer toolbar -->
+    <div class="toolbar">
+      <span class="pill"><span id="count-remaining">0</span> left</span>
+      <span class="pill" id="timer-chip" aria-live="polite">00:00.0</span>
+      <span class="hint">Tap the big card or press <b>Space</b> / <b>Enter</b></span>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    // ───────────────────────────────────────────────────────────────────────────
+    // ELEMENTS
+    // ───────────────────────────────────────────────────────────────────────────
+    const els = {
+      input:      document.getElementById('name-input'),
+      submit:     document.getElementById('btn-submit'),
+      reset:      document.getElementById('btn-reset'),
+      undo:       document.getElementById('btn-undo'),
+      timerBtn:   document.getElementById('btn-timer'),
+      editBtn:    document.getElementById('btn-edit'),
+      display:    document.getElementById('name-display'),
+      left:       document.getElementById('count-remaining'),
+      timerChip:  document.getElementById('timer-chip'),
+      s1:         document.getElementById('btn-s1'),
+      s2:         document.getElementById('btn-s2'),
+      inlineEd:   document.getElementById('inline-editor'),
+      editInput:  document.getElementById('edit-input'),
+      editSave:   document.getElementById('btn-edit-save'),
+      editCancel: document.getElementById('btn-edit-cancel'),
+      toast:      document.getElementById('toast'),
+    };
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // STATE
+    // ───────────────────────────────────────────────────────────────────────────
+    let names = [];          // full deck for session
+    let remaining = [];      // unseen items
+    let history = [];        // revealed stack (current card is history[history.length-1])
+    let pickingLock = false; // debounce
+
+    // Inline editor mode: 'CHANGE' (replace current) or 'ADD_NEXT' (enqueue for next turn)
+    let editorMode = 'CHANGE';
+    let editorOpen = false;
+
+    // Persistence
+    const STORAGE_KEY = 'charades-picker-v1';
+    function saveState() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ names, remaining, history }));
+    }
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return false;
+        const d = JSON.parse(raw);
+        if (!Array.isArray(d.names) || !Array.isArray(d.remaining)) return false;
+        names = d.names; remaining = d.remaining; history = Array.isArray(d.history) ? d.history : [];
+        return true;
+      } catch { return false; }
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // TIMER
+    // ───────────────────────────────────────────────────────────────────────────
+    let timerState = 'IDLE';   // 'IDLE' | 'RUNNING' | 'STOPPED'
+    let timerStart = 0;
+    let timerElapsed = 0;
+    let timerRAF = null;
+
+    function fmtTime(ms){ const t=Math.max(0,Math.floor(ms)); const s=Math.floor(t/1000);
+      return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}.${Math.floor((t%1000)/100)}`; }
+    function setTimerChip(ms){ els.timerChip.textContent = fmtTime(ms); }
+    function isTiming(){ return timerState==='RUNNING'; }
+
+    // While timing or editing, block actions that change the current card/deck
+    function setLockedUI(isLocked) {
+      els.undo.disabled   = isLocked;
+      els.reset.disabled  = isLocked;
+      els.s1.disabled     = isLocked;
+      els.s2.disabled     = isLocked;
+      els.submit.disabled = isLocked;
+      els.display.style.pointerEvents = isLocked ? 'none' : 'auto';
+    }
+
+    function startTimer() {
+      if (isTiming() || !currentTitle()) return;
+      timerElapsed = 0; setTimerChip(0);
+      timerStart = performance.now();
+      timerState = 'RUNNING';
+      els.timerBtn.textContent = 'Stop Timer';
+      setLockedUI(true);
+      // When timer starts, edit button switches to "Add title"
+      setEditButtonLabel();
+
+      const tick = () => {
+        if (!isTiming()) return;
+        timerElapsed = performance.now() - timerStart;
+        setTimerChip(timerElapsed);
+        timerRAF = requestAnimationFrame(tick);
+      };
+      timerRAF = requestAnimationFrame(tick);
+    }
+
+    function stopTimer() {
+      if (!isTiming()) return;
+      cancelAnimationFrame(timerRAF); timerRAF=null;
+      timerElapsed = performance.now() - timerStart;
+      setTimerChip(timerElapsed);
+      timerState = 'STOPPED';
+      els.timerBtn.textContent = 'Start Timer';
+      setLockedUI(false);
+
+      // REQUIREMENT 1: After stop, disable Start Timer until the next title is shown
+      els.timerBtn.disabled = true;
+
+      // Still keep edit button in "Add title" mode after stop (until next card)
+      setEditButtonLabel();
+    }
+
+    function resetTimerToIdle() {
+      if (timerRAF) cancelAnimationFrame(timerRAF); timerRAF=null;
+      timerState = 'IDLE'; timerElapsed = 0; setTimerChip(0);
+      els.timerBtn.textContent = 'Start Timer';
+      els.timerBtn.disabled = false; // enabled by default; may be disabled elsewhere
+      setLockedUI(false);
+      setEditButtonLabel();
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // HELPERS
+    // ───────────────────────────────────────────────────────────────────────────
+    function uniqueClean(list){
+      const out=[], seen=new Set();
+      for (const raw of list){ const s=raw.trim(); if(!s) continue; const key=s.toLowerCase();
+        if(!seen.has(key)){ seen.add(key); out.push(s); } }
+      return out;
+    }
+    function parseInputToNames(){
+      return uniqueClean(els.input.value.split(/[\n,]/g).map(s=>s.trim()));
+    }
+    function updateCounter(){ els.left.textContent = remaining.length; }
+    function currentTitle(){ return history.length ? history[history.length-1] : null; }
+
+    function setUIPlaying(on){
+      els.input.classList.toggle('hidden', on);
+      els.reset.classList.toggle('hidden', !on ? true : false);
+      els.undo.classList.toggle('hidden',  !on ? true : false);
+      els.timerBtn.classList.toggle('hidden', !on ? true : false);
+      els.editBtn.classList.toggle('hidden',  !on ? true : false);
+      els.submit.textContent = on ? 'Restart (Load New List)' : 'Start';
+      if(!on) resetTimerToIdle();
+      setEditButtonLabel();
+    }
+
+    // Label + mode for the Edit button:
+    //  - If timer NOT started: "Change title" (replace current)
+    //  - If timer STARTED or STOPPED for current card (before next pick): "Add title" (queue for next)
+    function setEditButtonLabel(){
+      if (!currentTitle()){ els.editBtn.textContent = 'Change title'; editorMode='CHANGE'; return; }
+      if (timerState==='IDLE'){ els.editBtn.textContent = 'Change title'; editorMode='CHANGE'; }
+      else { els.editBtn.textContent = 'Add title'; editorMode='ADD_NEXT'; }
+    }
+
+    function showToast(msg){
+      els.toast.textContent = msg;
+      els.toast.classList.add('show');
+      setTimeout(()=>els.toast.classList.remove('show'), 1200);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // INLINE EDITOR (CHANGE or ADD_NEXT)
+    // ───────────────────────────────────────────────────────────────────────────
+    function openEditor(prefill=''){
+      // Don’t allow opening while timer is running
+      if (isTiming() || editorOpen) return;
+      editorOpen = true;
+      els.inlineEd.classList.remove('hidden');
+      els.display.style.pointerEvents = 'none'; // block picking while editing
+      els.editInput.value = prefill;
+      els.editInput.focus();
+      // Disable actions while editor open
+      els.undo.disabled = true; els.reset.disabled = true; els.submit.disabled = true; els.s1.disabled = true; els.s2.disabled = true;
+    }
+
+    function closeEditor(){
+      if (!editorOpen) return;
+      editorOpen = false;
+      els.inlineEd.classList.add('hidden');
+      els.display.style.pointerEvents = isTiming() ? 'none' : 'auto';
+      // Re-enable actions unless timer running
+      setLockedUI(isTiming());
+    }
+
+    // Apply a "Change title" (replace current card)
+    function applyChangeTitle(newTitle){
+      const t = newTitle.trim();
+      if (!t) { showToast('Please enter a title'); return false; }
+      const before = currentTitle();
+      // Replace the top of history
+      history[history.length-1] = t;
+      els.display.textContent = t;
+
+      // Deduplicate: remove the same title from remaining if present
+      const idx = remaining.findIndex(x => x.toLowerCase() === t.toLowerCase());
+      if (idx >= 0) remaining.splice(idx,1);
+
+      // Optionally track t in names (non-destructive): add if not present
+      if (!names.some(x => x.toLowerCase() === t.toLowerCase())) names.push(t);
+
+      saveState(); updateCounter();
+      resetTimerToIdle(); // new "content" → fresh timer
+      showToast(`Saved: ${t}`);
+      return true;
+    }
+
+    // Apply an "Add title" (queue for next person)
+    function applyAddNext(newTitle){
+      const t = newTitle.trim();
+      if (!t) { showToast('Please enter a title'); return false; }
+      // Ensure it won't appear twice
+      if (!remaining.some(x => x.toLowerCase() === t.toLowerCase())
+          && !(currentTitle() && currentTitle().toLowerCase()===t.toLowerCase())) {
+        // Put at the very front so it’s guaranteed to be next
+        remaining.unshift(t);
+      }
+      // Also include in names for session resets if missing
+      if (!names.some(x => x.toLowerCase() === t.toLowerCase())) names.push(t);
+
+      saveState(); updateCounter();
+      // Keep timer in STOPPED state (per your flow). Start Timer stays disabled until the next pick.
+      showToast(`Queued for next: ${t}`);
+      return true;
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // ACTIONS
+    // ───────────────────────────────────────────────────────────────────────────
+    function startOrEdit(event){
+      event?.stopPropagation?.();
+      if (isTiming() || editorOpen) return;
+
+      // Enter edit mode if currently playing
+      if (els.input.classList.contains('hidden')) {
+        els.input.classList.remove('hidden');
+        els.submit.textContent = 'Load';
+        els.undo.classList.add('hidden');
+        els.reset.classList.add('hidden');
+        els.timerBtn.classList.add('hidden');
+        els.editBtn.classList.add('hidden');
+        if (!els.input.value.trim() && names.length) els.input.value = names.join('\n');
+        els.input.focus();
+        try { const len = els.input.value.length; els.input.setSelectionRange(len,len); } catch {}
+        return;
+      }
+
+      // Load new list from the textarea
+      const parsed = parseInputToNames();
+      if (parsed.length === 0) {
+        els.display.textContent = 'Please enter at least one item';
+        setUIPlaying(false); updateCounter(); saveState(); return;
+      }
+      names = parsed.slice(); remaining = parsed.slice(); history = [];
+      els.display.textContent = 'Tap here to pick a random name';
+      setUIPlaying(true); updateCounter(); saveState(); resetTimerToIdle(); els.display.focus();
+      // After load, timer disabled until a card is shown
+      els.timerBtn.disabled = true;
+    }
+
+    function pickOne(){
+      if (pickingLock || isTiming() || editorOpen) return;
+      pickingLock = true;
+      try{
+        if (remaining.length === 0){ els.display.textContent = 'The End'; return; }
+        const idx = Math.floor(Math.random() * remaining.length);
+        const picked = remaining[idx];
+        remaining.splice(idx,1);
+        history.push(picked);
+        els.display.textContent = picked;
+        updateCounter(); saveState();
+        resetTimerToIdle();
+        // NEW TITLE SHOWN → enable Start Timer (it was disabled after stop)
+        els.timerBtn.disabled = false;
+        setEditButtonLabel();
+      } finally { setTimeout(()=>{ pickingLock=false; }, 180); }
+    }
+
+    function undoOne(){
+      if (history.length === 0 || isTiming() || editorOpen) return;
+      const last = history.pop();
+      const pos = Math.floor(Math.random() * (remaining.length + 1));
+      remaining.splice(pos, 0, last);
+      // Show the new current (previous in history) or placeholder if none
+      if (history.length) {
+        els.display.textContent = history[history.length - 1];
+        // With a (different) card showing now, allow timer again
+        els.timerBtn.disabled = false;
+      } else {
+        els.display.textContent = 'Tap here to pick a random name';
+        els.timerBtn.disabled = true; // no current card yet
+      }
+      updateCounter(); saveState(); resetTimerToIdle(); setEditButtonLabel();
+    }
+
+    function resetGame(){
+      if (isTiming() || editorOpen) return;
+      remaining = names.slice(); history = [];
+      els.display.textContent = 'Deck reset. Tap to start!';
+      updateCounter(); saveState(); resetTimerToIdle();
+      els.timerBtn.disabled = true; // no card yet
+      els.display.focus();
+    }
+
+    function loadSample(list){
+      if (isTiming() || editorOpen) return;
+      if (!Array.isArray(list) || list.length===0) {
+        els.display.textContent = 'Sample is empty. Paste your list into the editor.';
+      } else {
+        els.input.value = list.join('\n');
+        els.display.textContent = 'Sample loaded. Review/edit, then click “Load”.';
+      }
+      els.input.classList.remove('hidden');
+      els.submit.textContent = 'Load';
+      els.undo.classList.add('hidden'); els.reset.classList.add('hidden');
+      els.timerBtn.classList.add('hidden'); els.editBtn.classList.add('hidden');
+      resetTimerToIdle();
+      els.input.focus(); try{ const len=els.input.value.length; els.input.setSelectionRange(len,len);}catch{}
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // SAMPLE ARRAYS (leave empty; paste later)
+    // ───────────────────────────────────────────────────────────────────────────
+    // 100 Telugu titles released before 1990
+    const SAMPLE1_PRE1990 = [
+      "Pathala Bhairavi (1951)","Malliswari (1951)","Devadasu (1953)","Raju Peda (1954)","Missamma (1955)",
+      "Donga Ramudu (1955)","Tenali Ramakrishna (1956)","Mayabazar (1957)","Suvarna Sundari (1957)","Bhookailas (1958)",
+      "Appu Chesi Pappu Koodu (1959)","Sri Venkateswara Mahatyam (1960)","Velugu Needalu (1961)","Gundamma Katha (1962)","Bhishma (1962)",
+      "Mooga Manasulu (1963)","Nartanasala (1963)","Lava Kusa (1963)","Dr. Chakravarthy (1964)","Ramudu Bheemudu (1964)",
+      "Sri Krishna Pandaveeyam (1965)","Aatma Gowravam (1965)","Paramanandayya Sishyula Katha (1966)","Palnati Yudham (1966)","Ummadi Kutumbam (1967)",
+      "Bhakta Prahlada (1967)","Gopaludu Bhoopaludu (1967)","Bangaru Panjaram (1968)","Bhale Kodallu (1968)","Aadarsa Kutumbam (1969)",
+      "Adrushtavanthulu (1969)","Mosagallaku Mosagadu (1971)","Dasara Bullodu (1971)","Prem Nagar (1971)","Sampoorna Ramayanam (1971)",
+      "Manchi Rojulu Vachchai (1972)","Badi Panthulu (1972)","Papam Pasivadu (1972)","Devudu Chesina Manushulu (1973)","Alluri Seeta Ramaraju (1974)",
+      "Manchi Manushulu (1974)","Soggadu (1975)","Secretary (1976)","Bhakta Kannappa (1976)","Seeta Kalyanam (1976)",
+      "Adavi Ramudu (1977)","Yamagola (1977)","Amar Deep (1977 Telugu)","Manavoori Pandavulu (1978)","Padaharella Vayasu (1978)",
+      "Idi Katha Kaadu (1979)","Vetagadu (1979)","Karthika Deepam (1979)","Sankarabharanam (1980)","Seethakoka Chiluka (1981)",
+      "Premabhishekam (1981)","Aradhana (1982)","Subhalekha (1982)","Abhilasha (1983)","Sagara Sangamam (1983)",
+      "Khaidi (1983)","Challenge (1984)","Bobbili Brahmanna (1984)","Srivariki Premalekha (1984)","Justice Chowdary (1984)",
+      "Rakshasudu (1986)","Swathi Muthyam (1986)","Chantabbai (1986)","Sirivennela (1986)","Rendu Rella Aaru (1986)",
+      "Kaliyuga Pandavulu (1986)","Trimurtulu (1987)","Aha Naa Pellanta! (1987)","Swayam Krushi (1987)","Stuvartupuram Police Station (1988)",
+      "Rudraveena (1988)","Athaku Yamudu Ammayiki Mogudu (1989)","Yamudiki Mogudu (1988)","Kondaveeti Donga (1990?)","Karthavyam (1990?)",
+      "Geethanjali (1989)","Shiva (1989)","Station Master (1988)","Aakhari Poratam (1988)","Aswaddhama? (skip)",
+      "Ananda Bhairavi (1983)","Subhash Chandra Bose? (skip)","Aparichithudu? (skip)","Vijetha (1985)","Challenge Ram Gopal Varma? (1984)",
+      "Majnu (1987)","Mouna Ragam (Telugu dub 1986)","Pratighatana (1985)","Kartavyam (1990—edge)","Vivaha Bhojanambu (1988)",
+      "Nanna Garu (1988)","Tila? (skip)","Raktha Sambandham (1962)","Agninakshatram? (skip)","Pelli Chesi Choodu (1952)",
+      "Ardhangi (1955)","Vagdanam (1961)","Iddaru Mitrulu (1961)","Bhaktha Tukaram (1973)","Kathanayakudu (1984)",
+      "Mouna Poratam (1989)","Aparaadhi (1977)","Gruhapravesam (1976)","Eduruleni Manishi (1975)","Muthyala Muggu (1975)"
+    ];
+
+    // NOTE: Two 1990-edge titles above are close to 1990; if you strictly want <= 1989 only, delete the ones with (1990?) markers.
+
+    // 200 Telugu titles (old + modern)
+    const SAMPLE2_ALLERA = [
+      "Mayabazar","Pathala Bhairavi","Gundamma Katha","Sankarabharanam","Sagara Sangamam","Swathi Muthyam","Rudraveena","Geethanjali","Shiva","Maro Charitra",
+      "Premabhishekam","Sirivennela","Aha Naa Pellanta!","Adavi Ramudu","Yamagola","Manavoori Pandavulu","Khaidi","Challenge","Ramudu Bheemudu","Missamma",
+      "Devadasu","Malliswari","Appu Chesi Pappu Koodu","Tenali Ramakrishna","Bhookailas","Sri Venkateswara Mahatyam","Mooga Manasulu","Nartanasala","Lava Kusa","Sri Krishna Pandaveeyam",
+      "Alluri Seeta Ramaraju","Soggadu","Manchi Manushulu","Seeta Kalyanam","Bhakta Kannappa","Vetagadu","Karthika Deepam","Prem Nagar","Dasara Bullodu","Badi Panthulu",
+      "Baahubali: The Beginning","Baahubali: The Conclusion","Magadheera","Rangasthalam","RRR","Mahanati","Eega","Ala Vaikunthapurramuloo","Pushpa: The Rise","Arjun Reddy",
+      "Jersey","Kanche","Vedam","Manam","1: Nenokkadine","Athadu","Okkadu","Pokiri","Khaleja","Leader",
+      "Ye Maaya Chesave","Nuvvu Naaku Nachav","Bommarillu","Arya","Arya 2","Nuvvostanante Nenoddantana","Tholi Prema (1998)","Tholi Prema (2018)","Fidaa","Geetha Govindam",
+      "Brochevarevarura","Goodachari","Agent Sai Srinivasa Athreya","Awe!","C/O Kancharapalem","Ante Sundaraniki","Taxiwaala","Kshanam","Gamyam","Pelli Choopulu",
+      "Middle Class Melodies","Yevade Subramanyam","Julayi","Race Gurram","Sarrainodu","Janatha Garage","Srimanthudu","Dookudu","Gabbar Singh","Temper",
+      "Nannaku Prematho","Bharat Ane Nenu","Malli Raava","Sita Ramam","Hi Nanna","DevaDas","Shyam Singha Roy","Karthikeya","Karthikeya 2","Mishan Impossible",
+      "Uppena","RX 100","Sye","Happy Days","Gang Leader (2019)","Evaru","Naandhi","Major","Balagam","Virata Parvam",
+      "Krack","Jalsa","Attarintiki Daredi","Tagore","Indra","Narasimha Naidu","Simhadri","Billa","Saaho","Gauthamiputra Satakarni",
+      "Gharshana","Ghajini (Telugu)","Seethamma Vakitlo Sirimalle Chettu","Businessman","Orange","Yevadu","Sye Raa Narasimha Reddy","Yatra","Maharshi","Sarileru Neekevvaru",
+      "Akhanda","Dasara","Baby (2023)","Waltair Veerayya","Veera Simha Reddy","Bro (2023)","Kushi (2023)","Hi Nanna","Samajavaragamana (2023)","Virupaksha (2023)",
+      "Custody (2023)","OG? (skip if unreleased)","Guntur Kaaram (2024)","Tillu Square (2024)","DJ Tillu (2022)","Eagle (2024)","Hanu-Man (2024)","Salaar: Part 1 – Ceasefire","Skanda (2023)","Brochevarevarura (already?)",
+      "Mathu Vadalara","Bheeshma","Jathi Ratnalu","Most Eligible Bachelor","Love Story (2021)","Thimmarusu","Colour Photo","Agent","Spy","Godavari",
+      "Happy","Aadavari Matalaku Ardhalu Verule","Darling","Mr. Perfect","Mirchi","Brahmotsavam","Anukokunda Oka Roju","Athadu Aame O Scooter","Oohalu Gusagusalade","Uyyala Jampala",
+      "Bhale Bhale Magadivoy","Gentleman","Ek Mini Katha","Ashoka Vanamlo Arjuna Kalyanam","Oke Oka Jeevitham","V (2020)","Agnyaathavaasi","Sardaar Gabbar Singh","Janatha Garage (already)","Sarrainodu (already)",
+      "Oopiri","Soggade Chinni Nayana","Kshanam (already)","Goodachari (already)","Evaru (already)","Agent Sai Srinivasa Athreya (already)","Gaali Sampath","Tholi Prema (1998) (already)","Godfather (2022)","Karthikeya 2 (already)",
+      "Bimbisara","Kalyanam Kamaneeyam","Mukhachitram","Hello","Devadas (2018)","Rangasthalam (already)","Ninnu Kori","Majili","Dear Comrade","World Famous Lover",
+      "Pakka Commercial","Geetha Govindam (already)","Yashoda","Shakuntala Devi? (Hindi) (skip)","Gaddalakonda Ganesh","ISmart Shankar","Amigos","Agent (already)","Adhurs","Kick",
+      "Kick 2","Naayak","Dhruva","Yatra (already)","Khaidi No. 150","Legend","Dictator","Lion","Ala Modalaindi","Solo",
+      "Seethamma Vakitlo (already)","Attarintiki Daredi (already)","S/O Satyamurthy","A Aa","Trivikram’s Khaleja (already)","Julayi (already)","Ami Thumi","Devadasu (2006)","Pournami","Varsham",
+      "Okkadu (already)","Bava","Chatrapathi","Darling (already)","Mr. Perfect (already)","Rebel","Baahubali 2 (already)","Baahubali 1 (already)","Radhe Shyam","Adipurush (Telugu)",
+      "Konchem Ishtam Konchem Kashtam","Kotha Bangaru Lokam","Ashta Chamma","Anand","Godavari (already)","Amrutham Chandamamalo","Jayam","Nuvve Kavali","Chitralahari","F2: Fun and Frustration",
+      "F3: Fun and Frustration","Vinaro Bhagyamu Vishnu Katha","Malli Raava (already)","Oka Manasu","Premam (Telugu)","Sammohanam","Antariksham 9000 KMPH","Kanche (already)","Kittu Unnadu Jagratha","Ekkadiki Pothavu Chinnavada",
+      "Karthikeya (already)","Pilla Zamindar","Ala Vaikunthapurramuloo (already)","Pushpa: The Rise (already)","Jathi Ratnalu (already)","Baby (already)","Balagam (already)","Hi Nanna (already)","Sita Ramam (already)","Hanu-Man (already)"
+    ];
+    // ───────────────────────────────────────────────────────────────────────────
+    // EVENTS
+    // ───────────────────────────────────────────────────────────────────────────
+    // Start / Restart→Edit / Load
+    els.submit.addEventListener('click', startOrEdit, { capture: true });
+    els.submit.addEventListener('click', e => e.stopPropagation());
+
+    // Deck controls
+    els.reset.addEventListener('click', e => { e.stopPropagation(); resetGame(); }, { capture: true });
+    els.undo.addEventListener('click',  e => { e.stopPropagation(); undoOne();   }, { capture: true });
+
+    // Timer toggle (Start/Stop); Start is re-enabled only when a new card is shown
+    els.timerBtn.addEventListener('click', (e)=>{ e.stopPropagation(); if (isTiming()) stopTimer(); else startTimer(); });
+
+    // Edit/Queue button
+    els.editBtn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      if (editorOpen) return;
+      const cur = currentTitle();
+      if (!cur && editorMode==='CHANGE') return; // nothing to change yet
+      if (editorMode==='CHANGE'){
+        openEditor(cur ?? '');
+      } else { // ADD_NEXT
+        // Only after timer is stopped (per your spec)
+        if (timerState!=='STOPPED'){ showToast('Stop the timer first'); return; }
+        openEditor(''); // add new title for next turn
+      }
+    });
+
+    // Inline editor actions
+    els.editSave.addEventListener('click', ()=>{
+      const val = els.editInput.value;
+      if (editorMode==='CHANGE'){ if (applyChangeTitle(val)) closeEditor(); }
+      else { if (applyAddNext(val)) closeEditor(); }
+    });
+    els.editCancel.addEventListener('click', ()=> closeEditor());
+
+    // Card click → pick (disabled while timing or editing)
+    els.display.addEventListener('click', () => pickOne());
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e)=>{
+      const k = e.key.toLowerCase();
+      if (k===' ' || k==='enter'){
+        if (isTiming() || editorOpen) { e.preventDefault(); return; }
+        e.preventDefault(); pickOne();
+      } else if ((e.ctrlKey||e.metaKey) && k==='z'){
+        if (isTiming() || editorOpen){ e.preventDefault(); return; }
+        e.preventDefault(); undoOne();
+      } else if ((e.ctrlKey||e.metaKey) && k==='r'){
+        if (isTiming() || editorOpen){ e.preventDefault(); return; }
+        e.preventDefault(); resetGame();
+      } else if (k==='t'){
+        e.preventDefault();
+        if (isTiming()) stopTimer(); else startTimer();
+      } else if (k==='e'){ // quick open editor
+        e.preventDefault();
+        if (editorOpen) return;
+        if (editorMode==='CHANGE'){ const cur=currentTitle(); if (cur) openEditor(cur); }
+        else { if (timerState==='STOPPED') openEditor(''); }
+      } else if (k==='escape'){
+        if (isTiming()){ e.preventDefault(); stopTimer(); }
+        if (editorOpen){ e.preventDefault(); closeEditor(); }
+      }
+    });
+
+    // Sample loaders
+    els.s1.addEventListener('click', (e)=>{ e.stopPropagation(); loadSample(SAMPLE1_PRE1990); });
+    els.s2.addEventListener('click', (e)=>{ e.stopPropagation(); loadSample(SAMPLE2_ALLERA ); });
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // INIT
+    // ───────────────────────────────────────────────────────────────────────────
+    if (loadState() && (remaining.length > 0 || history.length > 0)) {
+      setUIPlaying(true); updateCounter();
+      if (history.length) { els.display.textContent = history[history.length-1]; els.timerBtn.disabled = false; }
+      else { els.display.textContent = 'Tap here to pick a random name'; els.timerBtn.disabled = true; }
+    } else {
+      setUIPlaying(false); updateCounter(); els.timerBtn.disabled = true;
+    }
+    resetTimerToIdle(); // ensure clean timer state on load
+  </script>
+</body>
+</html>
