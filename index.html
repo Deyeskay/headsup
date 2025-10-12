@@ -1,19 +1,49 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Random Name Picker + Timer + Edit/Queue</title>
+  <!-- 🧩 Brand meta + favicon for DumbCharades -->
+<title>DumbCharades — SK Games</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="Play Dumb Charades with a sleek random title picker, inline edits, and a round timer. Paste your list and go!" />
+<meta name="theme-color" content="#000000" />
+
+<!-- Favicon (SVG, modern browsers) -->
+<link rel="icon" type="image/svg+xml" href="skgames_icon.svg"/>
+
+<!-- Safari pinned tab (monochrome mask) -->
+<link rel="mask-icon" href="skgames_icon.svg" color="#e8eaed" />
+
+<!-- Open Graph / Twitter -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="DumbCharades — SK Games" />
+<meta property="og:description" content="Play Dumb Charades with a sleek random title picker, inline edits, and a round timer." />
+<meta property="og:image" content="skgames_icon.svg" />
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="DumbCharades — SK Games" />
+<meta name="twitter:description" content="Play Dumb Charades with a sleek random title picker, inline edits, and a round timer." />
+<meta name="twitter:image" content="skgames_icon.svg" />
+
   <style>
     :root { --bg:#000; --fg:#fff; --muted:#9aa0a6; --accent:#e8eaed; }
     * { box-sizing: border-box; }
     html,body { height: 100%; margin: 0; }
-    body {
-      background: var(--bg); color: var(--fg);
-      display: grid; place-items: center; padding: 24px;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    }
-    .container { width: min(840px, 100%); display: grid; gap: 16px; }
+ 
+	/* TOP-LEFT BRAND + remove large top gap */
+body{
+  background: var(--bg);
+  color: var(--fg);
+  /* was: display:grid; place-items:center; */
+  padding: 72px 24px 24px; /* small top space so content doesn't sit under the brand */
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+.container{
+  width: min(840px, 100%);
+  margin: 0 auto;          /* center horizontally only */
+  display: grid;
+  gap: 16px;
+}
+ 
     textarea {
       width: 100%; min-height: 140px; font-size: 16px; padding: 12px 14px;
       background: #111; color: var(--fg); border: 1px solid #222; border-radius: 10px; resize: vertical;
@@ -53,9 +83,25 @@
       padding: 8px 14px; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s ease;
     }
     .toast.show { opacity: 1; }
+	/* Minimal brand in the top-left */
+.brand{
+  position: fixed;
+  top: 14px;
+  left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  user-select: none;
+}
+.brand img{ width: 50px; height: 50px; display: block; }
+.brand .t{ font-weight: 700; font-size: 16px; letter-spacing: .2px; }
   </style>
 </head>
 <body>
+<header class="brand">
+  <img src="skgames_icon.svg" alt="DumbCharades logo">
+  <span class="t">DumbCharades</span>
+</header>
   <div class="container">
     <!-- Editor textarea for bulk list -->
     <textarea id="name-input" placeholder="Paste or type items — separated by commas or new lines."></textarea>
