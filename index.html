@@ -53,6 +53,20 @@ body{
       padding: 10px 14px; border-radius: 10px; cursor: pointer; font-weight: 600; letter-spacing: .2px;
     }
     button:disabled { opacity: .45; cursor: not-allowed; }
+    
+    /* Start/Exit color variants */
+.btn-start{
+  background:#065f46;       /* green-700-ish */
+  border-color:#047857;
+}
+.btn-start:hover{ background:#047857; border-color:#059669; }
+
+.btn-exit{
+  background:#7f1d1d;       /* red-800-ish */
+  border-color:#991b1b;
+}
+.btn-exit:hover{ background:#b91c1c; border-color:#ef4444; }
+
     #name-display {
       user-select: none; text-align: center; font-weight: 800; line-height: 1.2;
       font-size: clamp(28px, 7vw, 64px); padding: 28px 18px; border-radius: 16px;
@@ -113,13 +127,10 @@ body{
     <textarea id="name-input" placeholder="Paste or type items — separated by commas or new lines."></textarea>
 
     <!-- Controls -->
-    <div class="row">
-      <button id="btn-submit">Start</button>
+    <div class="row" style="display: inline-block;">
+      <button id="btn-submit" style="float: right;">Start</button>
       <button id="btn-reset"  class="hidden">Reset</button>
-      <button id="btn-undo"   class="hidden">Undo</button>
-      <button id="btn-timer"  class="hidden">Start Timer</button>
-      <!-- NEW: Edit/Queue button (label switches: Change title / Add title) -->
-      <button id="btn-edit"   class="hidden">Change title</button>
+      <button id="btn-undo"   class="hidden">Undo</button> 
     </div>
  
     <!-- Big card hidden initially -->
@@ -131,6 +142,13 @@ body{
       <input id="edit-input" type="text" placeholder="Type a title..." />
       <button id="btn-edit-save">Save</button>
       <button id="btn-edit-cancel">Cancel</button>
+    </div>
+    
+    <!-- Controls -->
+    <div class="row"> 
+      <button id="btn-timer"  class="hidden">Start Timer</button>
+      <!-- NEW: Edit/Queue button (label switches: Change title / Add title) -->
+      <button id="btn-edit"   class="hidden">Change title</button>
     </div>
 
     <!-- Footer toolbar hidden initially -->
@@ -273,6 +291,12 @@ function resetTimerToIdle() {
     // ───────────────────────────────────────────────────────────────────────────
     // HELPERS
     // ───────────────────────────────────────────────────────────────────────────
+    function styleSubmit(mode){          // mode: 'start' | 'exit'
+      els.submit.classList.remove('btn-start','btn-exit');
+      els.submit.classList.add(mode === 'exit' ? 'btn-exit' : 'btn-start');
+    }
+
+    
     function show(el, yes){ el.classList.toggle('hidden', !yes); }
 
     // Fail-safe show/hide for control buttons
@@ -326,7 +350,9 @@ function resetTimerToIdle() {
       if (samplesRoot) show(samplesRoot, !on);
 
       // Primary button label
-      els.submit.textContent = on ? 'Restart (Load New List)' : 'Start';
+      els.submit.textContent = on ? 'Exit' : 'Start';
+        styleSubmit(on ? 'exit' : 'start');
+
 
       // Timer fresh state; its enabled/disabled comes from currentTitle()
       resetTimerToIdle();
@@ -447,6 +473,7 @@ function applyAddNext(newTitle){
     
         // Button stays "Start" (never "Load")
         els.submit.textContent = 'Start';
+        styleSubmit('start');
     
         // Hide in-game controls while editing
         hideControls();
@@ -593,6 +620,7 @@ function pickOne(){
       // We are still in landing/edit state (not started)
       els.input.classList.remove('hidden');
       els.submit.textContent = 'Start';           // keep "Start"
+      styleSubmit('start');
       show(els.submit, true);                     // reveal Start
       hideControls();                              // ensure in-game controls hidden while editing
       resetTimerToIdle();
