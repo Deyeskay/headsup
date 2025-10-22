@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html lang="en">
 <head>
   <!-- 🧩 Brand meta + favicon for DumbCharades -->
@@ -103,6 +102,13 @@ body{
   <span class="t">DumbCharades</span>
 </header>
   <div class="container">
+      
+    <!-- Optional sample buttons -->
+    <div class="samples">
+      <button id="btn-s1">Load sample 1 (100 pre-1990)</button>
+      <button id="btn-s2">Load sample 2 (200 all-era)</button>
+    </div>
+ 
     <!-- Editor textarea for bulk list -->
     <textarea id="name-input" placeholder="Paste or type items — separated by commas or new lines."></textarea>
 
@@ -115,15 +121,10 @@ body{
       <!-- NEW: Edit/Queue button (label switches: Change title / Add title) -->
       <button id="btn-edit"   class="hidden">Change title</button>
     </div>
+ 
+    <!-- Big card hidden initially -->
+<div id="name-display" class="hidden" tabindex="0" aria-live="polite">Tap here to pick a random name</div>
 
-    <!-- Optional sample buttons -->
-    <div class="samples">
-      <button id="btn-s1">Load sample 1 (100 pre-1990)</button>
-      <button id="btn-s2">Load sample 2 (200 all-era)</button>
-    </div>
-
-    <!-- Big card -->
-    <div id="name-display" tabindex="0" aria-live="polite">Tap here to pick a random name</div>
 
     <!-- Inline single-line editor (hidden until needed) -->
     <div id="inline-editor" class="editor hidden" role="dialog" aria-label="Edit title">
@@ -132,12 +133,12 @@ body{
       <button id="btn-edit-cancel">Cancel</button>
     </div>
 
-    <!-- Footer toolbar -->
-    <div class="toolbar">
-      <span class="pill"><span id="count-remaining">0</span> left</span>
-      <span class="pill" id="timer-chip" aria-live="polite">00:00.0</span>
-      <span class="hint">Tap the big card or press <b>Space</b> / <b>Enter</b></span>
-    </div>
+    <!-- Footer toolbar hidden initially -->
+<div class="toolbar hidden">
+  <span class="pill"><span id="count-remaining">0</span> left</span>
+  <span class="pill" id="timer-chip" aria-live="polite">00:00.0</span>
+  <span class="hint">Tap the big card or press <b>Space</b> / <b>Enter</b></span>
+</div>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -176,12 +177,12 @@ body{
     // Inline editor mode: 'CHANGE' (replace current) or 'ADD_NEXT' (enqueue for next turn)
     let editorMode = 'CHANGE';
     let editorOpen = false;
-	
-	let queuedNext = null; // holds a title that must appear on the very next pick
+    
+  let queuedNext = null; // holds a title that must appear on the very next pick
 
 
     // Persistence
-    const STORAGE_KEY = 'charades-picker-v1';
+    const STORAGE_KEY = 'charades-picker-v2'; // bump to avoid stale UI state
     function saveState() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ names, remaining, history }));
     }
@@ -247,27 +248,59 @@ body{
       els.timerBtn.textContent = 'Start Timer';
       setLockedUI(false);
 
-      // REQUIREMENT 1: After stop, disable Start Timer until the next title is shown
+      // After stop, disable Start Timer until the next title is shown
       els.timerBtn.disabled = true;
 
-      // Still keep edit button in "Add title" mode after stop (until next card)
+      // Keep edit button in "Add title" mode after stop (until next card)
       setEditButtonLabel();
     }
 
 function resetTimerToIdle() {
   if (timerRAF) cancelAnimationFrame(timerRAF); timerRAF = null;
-  timerState = 'IDLE'; timerElapsed = 0; setTimerChip(0);
+  timerState = 'IDLE';
+  timerElapsed = 0;
+  setTimerChip(0);
   els.timerBtn.textContent = 'Start Timer';
-  els.timerBtn.disabled = false;
+  // ✅ Enabled only if a card is showing
+  els.timerBtn.disabled = !currentTitle();
   setLockedUI(false);
   setEditButtonLabel();
-  queuedNext = null; // NEW: clear any queued title on full reset-to-idle
+  queuedNext = null;
 }
+
 
 
     // ───────────────────────────────────────────────────────────────────────────
     // HELPERS
     // ───────────────────────────────────────────────────────────────────────────
+    function show(el, yes){ el.classList.toggle('hidden', !yes); }
+
+    // Fail-safe show/hide for control buttons
+    function revealControls(){
+      ['btn-reset','btn-undo','btn-timer','btn-edit'].forEach(id=>{
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.remove('hidden');
+        el.removeAttribute('hidden');
+        el.style.display = '';
+      });
+      els.timerBtn.disabled = !currentTitle();
+    }
+    function hideControls(){
+      ['btn-reset','btn-undo','btn-timer','btn-edit'].forEach(id=>{
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.add('hidden');
+      });
+      els.timerBtn.disabled = true;
+    }
+
+    function updateInGameControls(){
+      // Delegate to the hard show/hide
+      const hasCard = !!currentTitle();
+      hasCard ? revealControls() : hideControls();
+    }
+
     function uniqueClean(list){
       const out=[], seen=new Set();
       for (const raw of list){ const s=raw.trim(); if(!s) continue; const key=s.toLowerCase();
@@ -281,15 +314,30 @@ function resetTimerToIdle() {
     function currentTitle(){ return history.length ? history[history.length-1] : null; }
 
     function setUIPlaying(on){
+      // Input visibility
       els.input.classList.toggle('hidden', on);
-      els.reset.classList.toggle('hidden', !on ? true : false);
-      els.undo.classList.toggle('hidden',  !on ? true : false);
-      els.timerBtn.classList.toggle('hidden', !on ? true : false);
-      els.editBtn.classList.toggle('hidden',  !on ? true : false);
+
+      // Big card + toolbar toggle with playing state
+      show(els.display, on);
+      show(document.querySelector('.toolbar'), on);
+
+      // Samples visible only on landing / edit-before-start
+      const samplesRoot = document.querySelector('.samples');
+      if (samplesRoot) show(samplesRoot, !on);
+
+      // Primary button label
       els.submit.textContent = on ? 'Restart (Load New List)' : 'Start';
-      if(!on) resetTimerToIdle();
+
+      // Timer fresh state; its enabled/disabled comes from currentTitle()
+      resetTimerToIdle();
+
+      // Ensure control visibility matches whether a card exists
+      currentTitle() ? revealControls() : hideControls();
+
       setEditButtonLabel();
     }
+
+
 
     // Label + mode for the Edit button:
     //  - If timer NOT started: "Change title" (replace current)
@@ -334,7 +382,6 @@ function resetTimerToIdle() {
     function applyChangeTitle(newTitle){
       const t = newTitle.trim();
       if (!t) { showToast('Please enter a title'); return false; }
-      const before = currentTitle();
       // Replace the top of history
       history[history.length-1] = t;
       els.display.textContent = t;
@@ -343,7 +390,7 @@ function resetTimerToIdle() {
       const idx = remaining.findIndex(x => x.toLowerCase() === t.toLowerCase());
       if (idx >= 0) remaining.splice(idx,1);
 
-      // Optionally track t in names (non-destructive): add if not present
+      // Track in names if missing
       if (!names.some(x => x.toLowerCase() === t.toLowerCase())) names.push(t);
 
       saveState(); updateCounter();
@@ -382,36 +429,68 @@ function applyAddNext(newTitle){
     function startOrEdit(event){
       event?.stopPropagation?.();
       if (isTiming() || editorOpen) return;
-
-      // Enter edit mode if currently playing
+    
+      const samplesRoot = document.querySelector('.samples');
+      const toolbarEl   = document.querySelector('.toolbar');
+    
+      // ▶ If we're currently PLAYING (textarea hidden), switch to RESTART/EDIT mode
       if (els.input.classList.contains('hidden')) {
+        // Show textarea for a fresh list
         els.input.classList.remove('hidden');
-        els.submit.textContent = 'Load';
-        els.undo.classList.add('hidden');
-        els.reset.classList.add('hidden');
-        els.timerBtn.classList.add('hidden');
-        els.editBtn.classList.add('hidden');
-        //if (!els.input.value.trim() && names.length) els.input.value = names.join('\n');
-		 
-		els.input.value = names.join('\n');   //(always reflect the latest deck including added titles):
-		
+    
+        // Hide the big card + toolbar while editing a new deck
+        if (toolbarEl) toolbarEl.classList.add('hidden');
+        els.display.classList.add('hidden');
+    
+        // Clear textarea (per your request)
+        els.input.value = '';
+    
+        // Button stays "Start" (never "Load")
+        els.submit.textContent = 'Start';
+    
+        // Hide in-game controls while editing
+        hideControls();
+    
+        // Show samples during restart/edit so you can re-seed quickly
+        if (samplesRoot) samplesRoot.classList.remove('hidden');
+    
+        // Clean timer state; also hide Start until there's content (same as landing)
+        resetTimerToIdle();
+        (typeof updateStartVisibility === 'function') && updateStartVisibility();
+    
+        // Focus caret ready for paste
         els.input.focus();
-        try { const len = els.input.value.length; els.input.setSelectionRange(len,len); } catch {}
         return;
       }
-
-      // Load new list from the textarea
+    
+      // ▶ We are on LANDING or in RESTART/EDIT (textarea visible) → actually LOAD the list
       const parsed = parseInputToNames();
       if (parsed.length === 0) {
         els.display.textContent = 'Please enter at least one item';
-        setUIPlaying(false); updateCounter(); saveState(); return;
+        setUIPlaying(false);
+        updateCounter();
+        saveState();
+        (typeof updateStartVisibility === 'function') && updateStartVisibility();
+        return;
       }
-      names = parsed.slice(); remaining = parsed.slice(); history = [];
+    
+      // Build new deck
+      names = parsed.slice();
+      remaining = parsed.slice();
+      history = [];
+    
+      // Enter PLAYING state: show big card + toolbar, hide samples
       els.display.textContent = 'Tap here to pick a random name';
-      setUIPlaying(true); updateCounter(); saveState(); resetTimerToIdle(); els.display.focus();
-      // After load, timer disabled until a card is shown
-      els.timerBtn.disabled = true;
+      setUIPlaying(true);
+      updateCounter();
+      saveState();
+      resetTimerToIdle();
+    
+      els.display.focus();
     }
+
+
+
 
 const beep = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA='); 
 let audioCtx = null;
@@ -442,7 +521,7 @@ function pickOne(){
 
     let picked, idx;
 
-    // NEW: if a title was queued, pick that one deterministically
+    // If a title was queued, pick that one deterministically
     if (queuedNext) {
       idx = remaining.findIndex(x => x.toLowerCase() === queuedNext.toLowerCase());
       if (idx < 0) idx = 0; // safety fallback
@@ -460,10 +539,13 @@ function pickOne(){
     els.display.textContent = picked;
     updateCounter();
     saveState();
-
-    resetTimerToIdle();
-    els.timerBtn.disabled = false; // enable Start Timer for the new card
+    
+    // Now that a card exists, force-show in-game controls
+    revealControls();
+    
+    resetTimerToIdle(); 
     setEditButtonLabel();
+
   } finally {
     setTimeout(() => { pickingLock = false; }, 180);
   }
@@ -478,13 +560,14 @@ function pickOne(){
       // Show the new current (previous in history) or placeholder if none
       if (history.length) {
         els.display.textContent = history[history.length - 1];
-        // With a (different) card showing now, allow timer again
-        els.timerBtn.disabled = false;
+        revealControls();              // still have a card → show controls
       } else {
         els.display.textContent = 'Tap here to pick a random name';
-        els.timerBtn.disabled = true; // no current card yet
+        hideControls();                // no current card → hide controls
       }
+      
       updateCounter(); saveState(); resetTimerToIdle(); setEditButtonLabel();
+
     }
 
     function resetGame(){
@@ -492,8 +575,10 @@ function pickOne(){
       remaining = names.slice(); history = [];
       els.display.textContent = 'Deck reset. Tap to start!';
       updateCounter(); saveState(); resetTimerToIdle();
-      els.timerBtn.disabled = true; // no card yet
       els.display.focus();
+      
+      hideControls();    // no card after reset → all controls hidden
+ 
     }
 
     function loadSample(list){
@@ -502,15 +587,20 @@ function pickOne(){
         els.display.textContent = 'Sample is empty. Paste your list into the editor.';
       } else {
         els.input.value = list.join('\n');
-        els.display.textContent = 'Sample loaded. Review/edit, then click “Load”.';
+        els.display.textContent = 'Sample loaded. Review/edit, then click “Start”.';
       }
+    
+      // We are still in landing/edit state (not started)
       els.input.classList.remove('hidden');
-      els.submit.textContent = 'Load';
-      els.undo.classList.add('hidden'); els.reset.classList.add('hidden');
-      els.timerBtn.classList.add('hidden'); els.editBtn.classList.add('hidden');
+      els.submit.textContent = 'Start';           // keep "Start"
+      show(els.submit, true);                     // reveal Start
+      hideControls();                              // ensure in-game controls hidden while editing
       resetTimerToIdle();
-      els.input.focus(); try{ const len=els.input.value.length; els.input.setSelectionRange(len,len);}catch{}
+    
+      els.input.focus();
+      try { const len=els.input.value.length; els.input.setSelectionRange(len,len); } catch {}
     }
+
 
     // ───────────────────────────────────────────────────────────────────────────
     // SAMPLE ARRAYS (leave empty; paste later)
@@ -584,7 +674,7 @@ function pickOne(){
     els.reset.addEventListener('click', e => { e.stopPropagation(); resetGame(); }, { capture: true });
     els.undo.addEventListener('click',  e => { e.stopPropagation(); undoOne();   }, { capture: true });
 
-    // Timer toggle (Start/Stop); Start is re-enabled only when a new card is shown
+    // Timer toggle (Start/Stop)
     els.timerBtn.addEventListener('click', (e)=>{ e.stopPropagation(); if (isTiming()) stopTimer(); else startTimer(); });
 
     // Edit/Queue button
@@ -596,7 +686,7 @@ function pickOne(){
       if (editorMode==='CHANGE'){
         openEditor(cur ?? '');
       } else { // ADD_NEXT
-        // Only after timer is stopped (per your spec)
+        // Only after timer is stopped
         if (timerState!=='STOPPED'){ showToast('Stop the timer first'); return; }
         openEditor(''); // add new title for next turn
       }
@@ -648,12 +738,22 @@ function pickOne(){
     // ───────────────────────────────────────────────────────────────────────────
     if (loadState() && (remaining.length > 0 || history.length > 0)) {
       setUIPlaying(true); updateCounter();
-      if (history.length) { els.display.textContent = history[history.length-1]; els.timerBtn.disabled = false; }
-      else { els.display.textContent = 'Tap here to pick a random name'; els.timerBtn.disabled = true; }
+      if (history.length) { els.display.textContent = history[history.length-1]; }
+      else { els.display.textContent = 'Tap here to pick a random name'; }
     } else {
-      setUIPlaying(false); updateCounter(); els.timerBtn.disabled = true;
+      setUIPlaying(false); updateCounter();
+      updateStartVisibility(); // show Start only if user typed something
     }
     resetTimerToIdle(); // ensure clean timer state on load
+    (currentTitle() ? revealControls() : hideControls());
+    
+    // Show Start only when there is something to start with
+    function updateStartVisibility(){
+      const hasText = !!els.input.value.trim();
+      show(els.submit, hasText);
+    }
+    els.input.addEventListener('input', updateStartVisibility);
+
   </script>
 </body>
 </html>
